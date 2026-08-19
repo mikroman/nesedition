@@ -14,7 +14,7 @@
 ;===============================================================================
 ; Zero Page Segment
 .segment "ZEROPAGE"
-  ; Zero Page memory is quicker to access, making it ideal for variables that are 
+  ; Zero Page memory is quicker to access, making it ideal for variables that are
   ; frequently used in your program.
   .include "../../library/libVariables.asm" ; Include variables (defined in external file)
 

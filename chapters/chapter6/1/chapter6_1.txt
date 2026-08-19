@@ -1,0 +1,514 @@
+ca65 V2.19 - Git 99b113d
+Main file   : c:\DEV\NES\DEV\ASM_dev\nesedition\chapters\chapter6\1\chapter6_1.asm
+Current file: c:\DEV\NES\DEV\ASM_dev\nesedition\chapters\chapter6\1\chapter6_1.asm
+
+000000r 1               ;===============================================================================
+000000r 1               ;                     RetroGameDev NES Edition chapter6_1
+000000r 1               ;===============================================================================
+000000r 1               ; NES ROM Header
+000000r 1               .segment "HEADER"
+000000r 1  4E 45 53       .byte "NES"           ; 'NES' identifier - tells the system it's a valid NES ROM
+000003r 1  1A             .byte $1a             ; Control byte for NES compatibility
+000004r 1  02             .byte 2               ; Number of 16KB PRG-ROM banks (2 x 16KB = 32KB of code)
+000005r 1  01             .byte 1               ; Number of 8KB CHR-ROM banks (1 x 8KB = 8KB of graphics)
+000006r 1  01             .byte 1 | (0 << 4)    ; Vertical mirroring
+000007r 1  00             .byte 0 & $f0         ; Using mapper 0 (no extra memory mappers)
+000008r 1  00 00 00 00    .byte 0,0,0,0,0,0,0,0 ; Padding bytes to complete the header
+00000Cr 1  00 00 00 00  
+000010r 1               
+000010r 1               ;===============================================================================
+000010r 1               ; Zero Page Segment
+000010r 1               .segment "ZEROPAGE"
+000000r 1                 ; Zero Page is used for variables that require quick access.
+000000r 1                 .include "../../library/libVariables.asm"  ; Include variable declarations from the library
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libVariables
+000000r 2               ;===============================================================================
+000000r 2               ; Variables
+000000r 2               
+000000r 2               ; Scroll Variables
+000000r 2  00 00        wBottomScrollX: .word 0 ; 1st byte = subpixels, 2nd byte = pixels
+000002r 2  00                           .byte 0 ; 3rd byte = nametable
+000003r 2  00 00        wBottomScrollY: .word 0
+000005r 2               
+000005r 2  00 00        wTopScrollX:    .word 0 ; 1st byte = subpixels, 2nd byte = pixels
+000007r 2  00                           .byte 0 ; 3rd byte = nametable
+000008r 2  00 00        wTopScrollY:    .word 0
+00000Ar 2               
+00000Ar 2               ; Render Flags
+00000Ar 2  00           bFrameReady:    .byte 0
+00000Br 2  00           bLoadRequested: .byte 0
+00000Cr 2  00           bLoadMenu:      .byte 0
+00000Dr 2  00           bLoadDesert:    .byte 0
+00000Er 2               
+00000Er 2               ; PPU Register Shadows (used to mirror and track changes to the PPU registers)
+00000Er 2  00           PPUCTRL_SHADOW:     .byte 0
+00000Fr 2  00           PPUMASK_SHADOW:     .byte 0
+000010r 2               
+000010r 2               ; Controller Variables
+000010r 2  00           bLibButtons:        .byte 0  ; Current state of controller buttons
+000011r 2  00           bLibButtonsLast:    .byte 0  ; Previous state of controller buttons
+000012r 2               
+000012r 2               ; Temporary Variables (used for various calculations)
+000012r 2  00           bLibTemp1:          .byte 0  ; General purpose temp variable (8-bit)
+000013r 2  00           bLibTemp2:          .byte 0  ; General purpose temp variable (8-bit)
+000014r 2  00           bLibTemp3:          .byte 0  ; General purpose temp variable (8-bit)
+000015r 2  00           bLibTemp4:          .byte 0  ; General purpose temp variable (8-bit)
+000016r 2  00 00        wLibTemp1:          .word 0  ; General purpose temp variable (16-bit)
+000018r 2  00 00        wLibTemp2:          .word 0  ; General purpose temp variable (16-bit)
+00001Ar 2               
+00001Ar 1               
+00001Ar 1               ;===============================================================================
+00001Ar 1               ; RAM Segment
+00001Ar 1               .segment "RAM"
+000000r 1               ; Defines a RAM segment to avoid assembler warnings in chapters not using FamiStudio.
+000000r 1               
+000000r 1               ;===============================================================================
+000000r 1               ; Code Segment
+000000r 1               .segment "CODE"
+000000r 1                 ; Include necessary library code for handling screen functions
+000000r 1                 .include "../../library/libDefines.asm"    ; Includes constants like color codes
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libDefines
+000000r 2               ;===============================================================================
+000000r 2               .feature c_comments  ; Enable the use of C-style comments in the assembler
+000000r 2               ; Constants
+000000r 2               
+000000r 2               ; Colors (PPU color codes)
+000000r 2               BLACK    = 14      ; Color code for black (background or sprite)
+000000r 2               WHITE    = 48      ; Color code for white
+000000r 2               RED      = 22      ; Color code for red
+000000r 2               CYAN     = 28      ; Color code for cyan
+000000r 2               PURPLE   = 36      ; Color code for purple
+000000r 2               GREEN    = 43      ; Color code for green
+000000r 2               BLUE     = 17      ; Color code for blue
+000000r 2               YELLOW   = 41      ; Color code for yellow
+000000r 2               GRAY     = 16      ; Color code for gray
+000000r 2               
+000000r 2               ; OAM (Object Attribute Memory) Bit Masks for sprite properties
+000000r 2               OAM_PALETTE  = %00000011  ; Bits 0-1: Sprite palette selection (values 0-3)
+000000r 2               OAM_BEHIND   = %00100000  ; Bit 5: Sprite behind the background flag (0 = in front, 1 = behind)
+000000r 2               OAM_FLIP_H   = %01000000  ; Bit 6: Horizontal flip (0 = normal, 1 = flipped)
+000000r 2               OAM_FLIP_V   = %10000000  ; Bit 7: Vertical flip (0 = normal, 1 = flipped)
+000000r 2               
+000000r 2               ; CPU Memory Locations
+000000r 2                                 ; $0000-$00FF: 256 bytes Zero Page (Used in libVariables.asm & gameVariables.asm)
+000000r 2               SPRITERAM = $0200 ; $0200-$02FF: 256 bytes of Sprite RAM (buffer for OAM data, copied during VBlank)
+000000r 2                                 ; $0300-$07FF: 1280 bytes free CPU RAM for general use
+000000r 2                                 ; ====================================
+000000r 2                                 ; CPU RAM is 2KB in total
+000000r 2               
+000000r 2               ; PPU Registers (Memory-mapped I/O addresses)
+000000r 2               PPUCTRL   = $2000  ; PPU Control register: Controls NMI enable, sprite size, background/sprite tile select, etc.
+000000r 2               PPUMASK   = $2001  ; PPU Mask register: Enables/disables rendering, grayscale, and visibility of sprites/backgrounds.
+000000r 2               PPUSTATUS = $2002  ; PPU Status register: VBlank flag, sprite 0 hit, sprite overflow status.
+000000r 2               OAMADDR   = $2003  ; OAM Address register: Set OAM address for sprite data reads/writes.
+000000r 2               OAMDATA   = $2004  ; OAM Data register: Read/write sprite data to/from OAM.
+000000r 2               PPUSCROLL = $2005  ; PPU Scroll register: Fine X/Y scrolling (two consecutive writes - X first, then Y).
+000000r 2               PPUADDR   = $2006  ; PPU Address register: Set VRAM address for read/write operations (two consecutive writes - MSB first, then LSB).
+000000r 2               PPUDATA   = $2007  ; PPU Data register: Read/write data to/from VRAM at the address set by PPUADDR.
+000000r 2               OAMDMA    = $4014  ; OAM DMA: DMA transfer of 256 bytes from CPU RAM to OAM (usually for sprite data).
+000000r 2               
+000000r 2               
+000000r 2               ; APU (Audio Processing Unit) Registers
+000000r 2               DMCFREQ   = $4010  ; DMC (Delta Modulation Channel) Frequency Control.
+000000r 2               APUFRAME  = $4017  ; APU Frame Counter: Controls frame interrupts and sequence for audio timing.
+000000r 2               
+000000r 2               ; JoyPad Registers (Controller input)
+000000r 2               JOYPAD1   = $4016  ; Player 1 input register: Write to latch inputs, read to get Player 1's controller state.
+000000r 2               JOYPAD2   = $4017  ; Player 2 input register: Read-only for Player 2's controller input.
+000000r 2               
+000000r 2               ; PPU Memory Locations (Nametable and Attribute Table addresses)
+000000r 2               
+000000r 2               ; Nametables (960 bytes each, arranged in a 2x2 grid for scrolling)
+000000r 2               NAMETABLE0       = $2000  ; Nametable 0 (top-left)
+000000r 2               NAMETABLE1       = $2400  ; Nametable 1 (top-right)
+000000r 2               NAMETABLE2       = $2800  ; Nametable 2 (bottom-left)
+000000r 2               NAMETABLE3       = $2C00  ; Nametable 3 (bottom-right)
+000000r 2               
+000000r 2               ; Attribute tables (64 bytes each, managing 16x16 pixel attribute blocks)
+000000r 2               ATTRTABLE0       = $23C0  ; Attribute table for Nametable 0
+000000r 2               ATTRTABLE1       = $27C0  ; Attribute table for Nametable 1
+000000r 2               ATTRTABLE2       = $2BC0  ; Attribute table for Nametable 2
+000000r 2               ATTRTABLE3       = $2FC0  ; Attribute table for Nametable 3
+000000r 2               
+000000r 2               ; Palette Memory Locations (Background and Sprite palettes)
+000000r 2               BGPALETTE        = $3F00  ; Background palette memory start address.
+000000r 2               SPPALETTE        = $3F10  ; Sprite palette memory start address.
+000000r 2               
+000000r 2               ; FamiStudio Sound Engine Configuration
+000000r 2               .define FAMISTUDIO_CA65_ZP_SEGMENT   ZEROPAGE    ; FamiStudio uses the Zero Page segment.
+000000r 2               .define FAMISTUDIO_CA65_RAM_SEGMENT  RAM         ; Define RAM segment for FamiStudio data.
+000000r 2               .define FAMISTUDIO_CA65_CODE_SEGMENT CODE        ; Define Code segment for FamiStudio.
+000000r 2               
+000000r 2               FAMISTUDIO_CFG_EXTERNAL         = 1  ; Enable external sound engine support.
+000000r 2               FAMISTUDIO_CFG_DPCM_SUPPORT     = 1  ; Enable support for DPCM (Delta Pulse Code Modulation) samples.
+000000r 2               FAMISTUDIO_CFG_SFX_SUPPORT      = 1  ; Enable support for sound effects.
+000000r 2               FAMISTUDIO_CFG_SFX_STREAMS      = 2  ; Number of sound effect channels.
+000000r 2               FAMISTUDIO_CFG_EQUALIZER        = 1  ; Enable equalizer effect.
+000000r 2               FAMISTUDIO_USE_VOLUME_TRACK     = 1  ; Enable volume effects.
+000000r 2               FAMISTUDIO_USE_PITCH_TRACK      = 1  ; Enable pitch effects.
+000000r 2               FAMISTUDIO_USE_VOLUME_SLIDES    = 1  ; Enable volume slides.
+000000r 2               FAMISTUDIO_USE_SLIDE_NOTES      = 1  ; Enable sliding notes (pitch bends).
+000000r 2               FAMISTUDIO_USE_VIBRATO          = 1  ; Enable vibrato effect.
+000000r 2               FAMISTUDIO_USE_ARPEGGIO         = 1  ; Enable arpeggio effect.
+000000r 2               FAMISTUDIO_CFG_SMOOTH_VIBRATO   = 1  ; Enable smooth vibrato transitions.
+000000r 2               FAMISTUDIO_USE_RELEASE_NOTES    = 1  ; Enable support for release notes (sustain/release).
+000000r 2               FAMISTUDIO_DPCM_OFF             = $e000  ; DPCM sample memory starting address.
+000000r 2               FAMISTUDIO_EXP_VRC6             = 1  ; Enable support for VRC6 expansion audio (Konami expansion chip).
+000000r 2               FAMISTUDIO_USE_DUTYCYCLE_EFFECT = 1  ; Enable duty cycle effect for sound manipulation.
+000000r 2               
+000000r 1                 .include "../../library/libScreen.asm"     ; Includes screen management functions
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libScreen
+000000r 2               ;===============================================================================
+000000r 2               ; Macros
+000000r 2               
+000000r 2               .macro LIBSCREEN_DISABLEPPU
+000000r 2                 ; PPUMASK: Disable background and sprites, while preserving custom settings
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK_SHADOW value
+000000r 2                 and #%11100111          ; Clear Bit 2 and Bit 3 (disable background and sprites)
+000000r 2                 sta PPUMASK             ; Store the updated value into the PPUMASK register
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               
+000000r 2                 ; PPUCTRL: Clear only the NMI enable bit (bit 7) and preserve existing settings
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL_SHADOW value
+000000r 2                 and #%01111111          ; Clear Bit 7 (disable NMI)
+000000r 2                 sta PPUCTRL             ; Store the updated value into PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_ENABLEPPU
+000000r 2                 ; PPUMASK: Ensure background and sprites are enabled, while preserving custom settings
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK_SHADOW value
+000000r 2                 ora #%00011000          ; Ensure background and sprites are enabled
+000000r 2                 sta PPUMASK             ; Store the updated value into the PPUMASK register
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               
+000000r 2                 ; PPUCTRL: Set only the NMI enable bit (bit 7) and merge with existing settings
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL_SHADOW value
+000000r 2                 ora #%10000000          ; Set Bit 7 (enable NMI)
+000000r 2                 sta PPUCTRL             ; Store the updated value into PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_INIT
+000000r 2               .scope
+000000r 2                 sei             ; Disable interrupts (IRQs)
+000000r 2                 cld             ; Disable decimal mode
+000000r 2                 ldx #$40
+000000r 2                 stx APUFRAME    ; Disable APU frame IRQ
+000000r 2                 ldx #$ff
+000000r 2                 txs             ; Set up stack
+000000r 2                 inx             ; Now X = 0
+000000r 2                 stx PPUCTRL     ; Disable NMI (Non-maskable interrupt)
+000000r 2                 stx PPUMASK     ; Disable rendering
+000000r 2                 stx DMCFREQ     ; Disable DMC IRQs
+000000r 2               
+000000r 2                 ; Clear the vblank flag to ensure LIBSCREEN_WAITVSYNC doesn't exit immediately
+000000r 2                 bit PPUSTATUS
+000000r 2               
+000000r 2                 ; Wait for vertical blank to make sure the PPU has stabilized
+000000r 2                 LIBSCREEN_WAITVSYNC
+000000r 2               
+000000r 2                 ; Fill RAM with $00 to initialize memory
+000000r 2                 txa             ; Conveniently, X is 0, which matches what we need for filling RAM
+000000r 2               clrmem:
+000000r 2                 sta $000,x
+000000r 2                 sta $100,x
+000000r 2                 sta $200,x
+000000r 2                 sta $300,x
+000000r 2                 sta $400,x
+000000r 2                 sta $500,x
+000000r 2                 sta $600,x
+000000r 2                 sta $700,x
+000000r 2                 inx
+000000r 2                 bne clrmem
+000000r 2               
+000000r 2                 ; Wait for another VSYNC, PPU is now fully ready
+000000r 2                 LIBSCREEN_WAITVSYNC
+000000r 2               
+000000r 2                 ; Choose some sensible PPU defaults here:
+000000r 2               
+000000r 2                 ; Enable background rendering in the leftmost 8 pixels
+000000r 2                 LIBSCREEN_LEFT8PIXELSBACKGROUNDENABLE
+000000r 2               
+000000r 2                 ; Disable sprite rendering in the leftmost 8 pixels
+000000r 2                 LIBSCREEN_LEFT8PIXELSSPRITESDISABLE
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSBACKGROUNDDISABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 and #%11111101          ; Clear Bit 1 (disable background in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSBACKGROUNDENABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 ora #%00000010          ; Set Bit 1 (enable background in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSSPRITESDISABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 and #%11111011          ; Clear Bit 2 (disable sprites in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSSPRITESENABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 ora #%00000100          ; Set Bit 2 (enable sprites in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LOADNAMETABLE_AA nametable, screen
+000000r 2               .scope
+000000r 2               
+000000r 2                 ; Set the PPU address to the starting position of the nametable
+000000r 2                 LIBSCREEN_SETPPUADDRESS_A nametable
+000000r 2               
+000000r 2                 ; Set source pointer to the start of screen data
+000000r 2                 LIBSCREEN_SETADDRESS_AA screen, wLibTemp1
+000000r 2               
+000000r 2                 ; Copy 1024 bytes (4 pages) from mapStart to the PPU
+000000r 2                 ldx #0                    ; Initialize X for page counter (0 to 3)
+000000r 2               copy_page:
+000000r 2                 ldy #0                    ; Start from the beginning of each page
+000000r 2               copy_row:
+000000r 2                 lda (wLibTemp1), y        ; Load data from mapStart + (X * 256) + Y
+000000r 2                 sta PPUDATA               ; Write data to the PPU
+000000r 2                 iny
+000000r 2                 bne copy_row              ; Repeat until Y overflows back to 0 (256 bytes per page)
+000000r 2               
+000000r 2                 inc wLibTemp1+1           ; Increment high byte of source to move to the next page
+000000r 2                 inx
+000000r 2                 cpx #4                    ; Loop until 4 pages are copied (1024 bytes)
+000000r 2                 bne copy_page
+000000r 2               
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LOADPALETTEENTRY_AVV palette, entry, color
+000000r 2               .scope
+000000r 2                 lda #>palette          ; High byte of palette address
+000000r 2                 sta PPUADDR            ; Set high byte of PPU address
+000000r 2                 lda #<palette + entry  ; Low byte with offset
+000000r 2                 sta PPUADDR            ; Set low byte of PPU address
+000000r 2                 lda #color             ; Load the color value
+000000r 2                 sta PPUDATA            ; Write the color to the PPU
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LOADPALETTE_AA palette, colorData
+000000r 2               .scope
+000000r 2                 LIBSCREEN_SETPPUADDRESS_A palette
+000000r 2               
+000000r 2                 ; Set palette data (16 bytes)
+000000r 2                 ldy #0
+000000r 2               palette_loop:
+000000r 2                 lda colorData,y
+000000r 2                 sta PPUDATA
+000000r 2                 iny
+000000r 2                 cpy #16
+000000r 2                 bne palette_loop
+000000r 2               
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETADDRESS_AA address, var16
+000000r 2                 lda #>address
+000000r 2                 sta var16+1
+000000r 2                 lda #<address
+000000r 2                 sta var16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETBACKGROUNDCOLOR_V color
+000000r 2                 LIBSCREEN_SETPPUADDRESS_A BGPALETTE
+000000r 2                 LIBSCREEN_SETPPUDATA_V color
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETPPUADDRESS_A address
+000000r 2                 lda #>address
+000000r 2                 sta PPUADDR
+000000r 2                 lda #<address
+000000r 2                 sta PPUADDR
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETPPUDATA_V byte
+000000r 2                 lda #byte
+000000r 2                 sta PPUDATA
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETSCROLL_AA wScrX, wScrY
+000000r 2               .scope
+000000r 2                 lda wScrX
+000000r 2                 sta PPUSCROLL
+000000r 2               
+000000r 2                 lda wScrY
+000000r 2                 sta PPUSCROLL
+000000r 2               
+000000r 2                 lda wScrX+1
+000000r 2                 and #1
+000000r 2                 sta bLibTemp1
+000000r 2               
+000000r 2                 lda PPUCTRL_SHADOW
+000000r 2                 and #$FE
+000000r 2                 ora bLibTemp1
+000000r 2                 sta PPUCTRL_SHADOW
+000000r 2                 sta PPUCTRL
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETSPRITESIZE8x8
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL settings from the shadow register
+000000r 2                 and #%11011111          ; Clear Bit 5 (enable 8x8 sprite mode)
+000000r 2                 sta PPUCTRL             ; Store the updated value in PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETSPRITESIZE8x16
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL settings from the shadow register
+000000r 2                 ora #%00100000          ; Set Bit 5 (enable 8x16 sprite mode)
+000000r 2                 sta PPUCTRL             ; Store the updated value in PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_WAITSPRITE0
+000000r 2               .scope
+000000r 2               wait_sprite0_set:
+000000r 2                 bit PPUSTATUS
+000000r 2                 bvs wait_sprite0_set
+000000r 2               wait_sprite0_clear:
+000000r 2                 bit PPUSTATUS
+000000r 2                 bvc wait_sprite0_clear
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_WAITVSYNC
+000000r 2               .scope
+000000r 2               wait_vsync:
+000000r 2                 bit PPUSTATUS
+000000r 2                 bpl wait_vsync
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 1               
+000000r 1               ;===============================================================================
+000000r 1               ; Game Initialization
+000000r 1               gameMainInit:
+000000r 1  78 D8 A2 40    LIBSCREEN_INIT ; Initialize the screen and PPU settings
+000004r 1  8E 17 40 A2  
+000008r 1  FF 9A E8 8E  
+00004Er 1               
+00004Er 1                 ; Load background palette
+00004Er 1  A9 3F 8D 06    LIBSCREEN_LOADPALETTE_AA BGPALETTE, Palette
+000052r 1  20 A9 00 8D  
+000056r 1  06 20 A0 00  
+000065r 1               
+000065r 1                 ; Load screen data to the left nametable
+000065r 1  A9 20 8D 06    LIBSCREEN_LOADNAMETABLE_AA NAMETABLE0, Screen
+000069r 1  20 A9 00 8D  
+00006Dr 1  06 20 A9 rr  
+00008Ar 1               
+00008Ar 1  A5 rr 09 18    LIBSCREEN_ENABLEPPU ; Enable PPU rendering (sprites, background)
+00008Er 1  8D 01 20 85  
+000092r 1  rr A5 rr 09  
+00009Cr 1                 ; No 'rts' (return) here, so the code will flow directly into the main game loop
+00009Cr 1               
+00009Cr 1               ;===============================================================================
+00009Cr 1               ; Main Game Update Loop
+00009Cr 1               gameMainUpdate:
+00009Cr 1  A5 rr          lda bFrameReady      ; Load the frame-ready flag
+00009Er 1  F0 FC          beq gameMainUpdate   ; If frame not ready (bFrameReady = 0), loop and wait
+0000A0r 1               
+0000A0r 1                 ; Game logic would go here (currently empty for this section)
+0000A0r 1               
+0000A0r 1  A9 00          lda #0               ; Reset the bFrameReady flag back to 0
+0000A2r 1  85 rr          sta bFrameReady      ; This prevents the game logic from running more than once per frame
+0000A4r 1  4C rr rr       jmp gameMainUpdate   ; Infinite loop - returns to the beginning of the update loop
+0000A7r 1               
+0000A7r 1               ;===============================================================================
+0000A7r 1               ; NMI (Non-Maskable Interrupt) Handler
+0000A7r 1               gameMainNMI:
+0000A7r 1  A9 01          lda #1               ; Set bFrameReady flag to 1 to signal the game update loop
+0000A9r 1  85 rr          sta bFrameReady      ; Store the flag in memory
+0000ABr 1  40             rti                  ; Return from interrupt - graphics update happens after this
+0000ACr 1               
+0000ACr 1               ;===============================================================================
+0000ACr 1               ; Data Segment
+0000ACr 1                 .include "gameData.asm" ; Include external game data (background map, palettes, etc.)
+0000ACr 2               ;===============================================================================
+0000ACr 2               ;                     RetroGameDev NES Edition gameData
+0000ACr 2               ;===============================================================================
+0000ACr 2               ; Palette Data
+0000ACr 2               Palette:
+0000ACr 2  0F 00 10 30    .incbin "../../content/testbackground.pal"
+0000B0r 2  0F 0C 21 32  
+0000B4r 2  0F 05 16 27  
+0000BCr 2               
+0000BCr 2               ;===============================================================================
+0000BCr 2               ; Screen Data
+0000BCr 2               Screen:
+0000BCr 2  01 01 01 01    .incbin "../../content/testbackground.nam"
+0000C0r 2  01 01 01 01  
+0000C4r 2  01 01 01 01  
+0004BCr 2               
+0004BCr 1               
+0004BCr 1               ;===============================================================================
+0004BCr 1               ; Character Segment (CHR-ROM)
+0004BCr 1               .segment "CHARS"
+000000r 1                 ; ROM chars start at PPU address $0000
+000000r 1                 ; This section will hold sprite and tile graphics. Currently, it loads a test screen
+000000r 1  00 00 00 00    .incbin "../../content/testbackground.chr"
+000004r 1  00 00 00 00  
+000008r 1  00 00 00 00  
+001000r 1               
+001000r 1               ;===============================================================================
+001000r 1               ; Interrupt Vectors
+001000r 1               .segment "VECTORS"
+000000r 1                 ; This segment defines what happens during specific events:
+000000r 1  rr rr          .word gameMainNMI     ; NMI (VBlank) - triggered every frame to handle graphics
+000002r 1  rr rr          .word gameMainInit    ; Reset - called when the game is first started
+000004r 1  00 00          .word 0               ; IRQ - not used in this simple project
+000004r 1               

@@ -1,0 +1,1028 @@
+ca65 V2.19 - Git 99b113d
+Main file   : c:\DEV\NES\DEV\ASM_dev\nesedition\chapters\chapter7\3\chapter7_3.asm
+Current file: c:\DEV\NES\DEV\ASM_dev\nesedition\chapters\chapter7\3\chapter7_3.asm
+
+000000r 1               ;===============================================================================
+000000r 1               ;                     RetroGameDev NES Edition chapter7_3
+000000r 1               ;===============================================================================
+000000r 1               ; NES ROM Header
+000000r 1               .segment "HEADER"
+000000r 1  4E 45 53       .byte "NES"           ; 'NES' identifier - tells the system it's a valid NES ROM
+000003r 1  1A             .byte $1a             ; Control byte for NES compatibility
+000004r 1  02             .byte 2               ; Number of 16KB PRG-ROM banks (2 x 16KB = 32KB of code)
+000005r 1  01             .byte 1               ; Number of 8KB CHR-ROM banks (1 x 8KB = 8KB of graphics)
+000006r 1  01             .byte 1 | (0 << 4)    ; Vertical mirroring
+000007r 1  00             .byte 0 & $f0         ; Using mapper 0 (no extra memory mappers)
+000008r 1  00 00 00 00    .byte 0,0,0,0,0,0,0,0 ; Padding bytes to complete the header
+00000Cr 1  00 00 00 00  
+000010r 1               
+000010r 1               ;===============================================================================
+000010r 1               ; Zero Page Segment
+000010r 1               .segment "ZEROPAGE"
+000000r 1                 ; Variables stored in zero page for faster access
+000000r 1                 .include "../../library/libVariables.asm"
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libVariables
+000000r 2               ;===============================================================================
+000000r 2               ; Variables
+000000r 2               
+000000r 2               ; Scroll Variables
+000000r 2  00 00        wBottomScrollX: .word 0 ; 1st byte = subpixels, 2nd byte = pixels
+000002r 2  00                           .byte 0 ; 3rd byte = nametable
+000003r 2  00 00        wBottomScrollY: .word 0
+000005r 2               
+000005r 2  00 00        wTopScrollX:    .word 0 ; 1st byte = subpixels, 2nd byte = pixels
+000007r 2  00                           .byte 0 ; 3rd byte = nametable
+000008r 2  00 00        wTopScrollY:    .word 0
+00000Ar 2               
+00000Ar 2               ; Render Flags
+00000Ar 2  00           bFrameReady:    .byte 0
+00000Br 2  00           bLoadRequested: .byte 0
+00000Cr 2  00           bLoadMenu:      .byte 0
+00000Dr 2  00           bLoadDesert:    .byte 0
+00000Er 2               
+00000Er 2               ; PPU Register Shadows (used to mirror and track changes to the PPU registers)
+00000Er 2  00           PPUCTRL_SHADOW:     .byte 0
+00000Fr 2  00           PPUMASK_SHADOW:     .byte 0
+000010r 2               
+000010r 2               ; Controller Variables
+000010r 2  00           bLibButtons:        .byte 0  ; Current state of controller buttons
+000011r 2  00           bLibButtonsLast:    .byte 0  ; Previous state of controller buttons
+000012r 2               
+000012r 2               ; Temporary Variables (used for various calculations)
+000012r 2  00           bLibTemp1:          .byte 0  ; General purpose temp variable (8-bit)
+000013r 2  00           bLibTemp2:          .byte 0  ; General purpose temp variable (8-bit)
+000014r 2  00           bLibTemp3:          .byte 0  ; General purpose temp variable (8-bit)
+000015r 2  00           bLibTemp4:          .byte 0  ; General purpose temp variable (8-bit)
+000016r 2  00 00        wLibTemp1:          .word 0  ; General purpose temp variable (16-bit)
+000018r 2  00 00        wLibTemp2:          .word 0  ; General purpose temp variable (16-bit)
+00001Ar 2               
+00001Ar 1               
+00001Ar 1               ;===============================================================================
+00001Ar 1               ; RAM Segment
+00001Ar 1               .segment "RAM"
+000000r 1               ; Defines a RAM segment to avoid assembler warnings in chapters not using FamiStudio.
+000000r 1               
+000000r 1               ;===============================================================================
+000000r 1               ; Code Segment
+000000r 1               .segment "CODE"
+000000r 1                 ; Include necessary library code for handling screen, math, and sprites
+000000r 1                 .include "../../library/libDefines.asm"    ; Includes constants like color codes
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libDefines
+000000r 2               ;===============================================================================
+000000r 2               .feature c_comments  ; Enable the use of C-style comments in the assembler
+000000r 2               ; Constants
+000000r 2               
+000000r 2               ; Colors (PPU color codes)
+000000r 2               BLACK    = 14      ; Color code for black (background or sprite)
+000000r 2               WHITE    = 48      ; Color code for white
+000000r 2               RED      = 22      ; Color code for red
+000000r 2               CYAN     = 28      ; Color code for cyan
+000000r 2               PURPLE   = 36      ; Color code for purple
+000000r 2               GREEN    = 43      ; Color code for green
+000000r 2               BLUE     = 17      ; Color code for blue
+000000r 2               YELLOW   = 41      ; Color code for yellow
+000000r 2               GRAY     = 16      ; Color code for gray
+000000r 2               
+000000r 2               ; OAM (Object Attribute Memory) Bit Masks for sprite properties
+000000r 2               OAM_PALETTE  = %00000011  ; Bits 0-1: Sprite palette selection (values 0-3)
+000000r 2               OAM_BEHIND   = %00100000  ; Bit 5: Sprite behind the background flag (0 = in front, 1 = behind)
+000000r 2               OAM_FLIP_H   = %01000000  ; Bit 6: Horizontal flip (0 = normal, 1 = flipped)
+000000r 2               OAM_FLIP_V   = %10000000  ; Bit 7: Vertical flip (0 = normal, 1 = flipped)
+000000r 2               
+000000r 2               ; CPU Memory Locations
+000000r 2                                 ; $0000-$00FF: 256 bytes Zero Page (Used in libVariables.asm & gameVariables.asm)
+000000r 2               SPRITERAM = $0200 ; $0200-$02FF: 256 bytes of Sprite RAM (buffer for OAM data, copied during VBlank)
+000000r 2                                 ; $0300-$07FF: 1280 bytes free CPU RAM for general use
+000000r 2                                 ; ====================================
+000000r 2                                 ; CPU RAM is 2KB in total
+000000r 2               
+000000r 2               ; PPU Registers (Memory-mapped I/O addresses)
+000000r 2               PPUCTRL   = $2000  ; PPU Control register: Controls NMI enable, sprite size, background/sprite tile select, etc.
+000000r 2               PPUMASK   = $2001  ; PPU Mask register: Enables/disables rendering, grayscale, and visibility of sprites/backgrounds.
+000000r 2               PPUSTATUS = $2002  ; PPU Status register: VBlank flag, sprite 0 hit, sprite overflow status.
+000000r 2               OAMADDR   = $2003  ; OAM Address register: Set OAM address for sprite data reads/writes.
+000000r 2               OAMDATA   = $2004  ; OAM Data register: Read/write sprite data to/from OAM.
+000000r 2               PPUSCROLL = $2005  ; PPU Scroll register: Fine X/Y scrolling (two consecutive writes - X first, then Y).
+000000r 2               PPUADDR   = $2006  ; PPU Address register: Set VRAM address for read/write operations (two consecutive writes - MSB first, then LSB).
+000000r 2               PPUDATA   = $2007  ; PPU Data register: Read/write data to/from VRAM at the address set by PPUADDR.
+000000r 2               OAMDMA    = $4014  ; OAM DMA: DMA transfer of 256 bytes from CPU RAM to OAM (usually for sprite data).
+000000r 2               
+000000r 2               
+000000r 2               ; APU (Audio Processing Unit) Registers
+000000r 2               DMCFREQ   = $4010  ; DMC (Delta Modulation Channel) Frequency Control.
+000000r 2               APUFRAME  = $4017  ; APU Frame Counter: Controls frame interrupts and sequence for audio timing.
+000000r 2               
+000000r 2               ; JoyPad Registers (Controller input)
+000000r 2               JOYPAD1   = $4016  ; Player 1 input register: Write to latch inputs, read to get Player 1's controller state.
+000000r 2               JOYPAD2   = $4017  ; Player 2 input register: Read-only for Player 2's controller input.
+000000r 2               
+000000r 2               ; PPU Memory Locations (Nametable and Attribute Table addresses)
+000000r 2               
+000000r 2               ; Nametables (960 bytes each, arranged in a 2x2 grid for scrolling)
+000000r 2               NAMETABLE0       = $2000  ; Nametable 0 (top-left)
+000000r 2               NAMETABLE1       = $2400  ; Nametable 1 (top-right)
+000000r 2               NAMETABLE2       = $2800  ; Nametable 2 (bottom-left)
+000000r 2               NAMETABLE3       = $2C00  ; Nametable 3 (bottom-right)
+000000r 2               
+000000r 2               ; Attribute tables (64 bytes each, managing 16x16 pixel attribute blocks)
+000000r 2               ATTRTABLE0       = $23C0  ; Attribute table for Nametable 0
+000000r 2               ATTRTABLE1       = $27C0  ; Attribute table for Nametable 1
+000000r 2               ATTRTABLE2       = $2BC0  ; Attribute table for Nametable 2
+000000r 2               ATTRTABLE3       = $2FC0  ; Attribute table for Nametable 3
+000000r 2               
+000000r 2               ; Palette Memory Locations (Background and Sprite palettes)
+000000r 2               BGPALETTE        = $3F00  ; Background palette memory start address.
+000000r 2               SPPALETTE        = $3F10  ; Sprite palette memory start address.
+000000r 2               
+000000r 2               ; FamiStudio Sound Engine Configuration
+000000r 2               .define FAMISTUDIO_CA65_ZP_SEGMENT   ZEROPAGE    ; FamiStudio uses the Zero Page segment.
+000000r 2               .define FAMISTUDIO_CA65_RAM_SEGMENT  RAM         ; Define RAM segment for FamiStudio data.
+000000r 2               .define FAMISTUDIO_CA65_CODE_SEGMENT CODE        ; Define Code segment for FamiStudio.
+000000r 2               
+000000r 2               FAMISTUDIO_CFG_EXTERNAL         = 1  ; Enable external sound engine support.
+000000r 2               FAMISTUDIO_CFG_DPCM_SUPPORT     = 1  ; Enable support for DPCM (Delta Pulse Code Modulation) samples.
+000000r 2               FAMISTUDIO_CFG_SFX_SUPPORT      = 1  ; Enable support for sound effects.
+000000r 2               FAMISTUDIO_CFG_SFX_STREAMS      = 2  ; Number of sound effect channels.
+000000r 2               FAMISTUDIO_CFG_EQUALIZER        = 1  ; Enable equalizer effect.
+000000r 2               FAMISTUDIO_USE_VOLUME_TRACK     = 1  ; Enable volume effects.
+000000r 2               FAMISTUDIO_USE_PITCH_TRACK      = 1  ; Enable pitch effects.
+000000r 2               FAMISTUDIO_USE_VOLUME_SLIDES    = 1  ; Enable volume slides.
+000000r 2               FAMISTUDIO_USE_SLIDE_NOTES      = 1  ; Enable sliding notes (pitch bends).
+000000r 2               FAMISTUDIO_USE_VIBRATO          = 1  ; Enable vibrato effect.
+000000r 2               FAMISTUDIO_USE_ARPEGGIO         = 1  ; Enable arpeggio effect.
+000000r 2               FAMISTUDIO_CFG_SMOOTH_VIBRATO   = 1  ; Enable smooth vibrato transitions.
+000000r 2               FAMISTUDIO_USE_RELEASE_NOTES    = 1  ; Enable support for release notes (sustain/release).
+000000r 2               FAMISTUDIO_DPCM_OFF             = $e000  ; DPCM sample memory starting address.
+000000r 2               FAMISTUDIO_EXP_VRC6             = 1  ; Enable support for VRC6 expansion audio (Konami expansion chip).
+000000r 2               FAMISTUDIO_USE_DUTYCYCLE_EFFECT = 1  ; Enable duty cycle effect for sound manipulation.
+000000r 2               
+000000r 1                 .include "../../library/libMath.asm"       ; Includes math-related functions
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libMath
+000000r 2               ;===============================================================================
+000000r 2               ; Macros
+000000r 2               
+000000r 2               .macro LIBMATH_ADD8TO8_AAA num1_8, num2_8, sum8
+000000r 2                 clc                 ; Clear carry before addition
+000000r 2                 lda num1_8          ; Load the first 8-bit value
+000000r 2                 adc num2_8          ; Add the second 8-bit value
+000000r 2                 sta sum8            ; Store the result in sum8
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD8TO8_AVA num1_8, num2_8, sum8
+000000r 2                 clc                 ; Clear carry before addition
+000000r 2                 lda num1_8          ; Load the first 8-bit value
+000000r 2                 adc #num2_8         ; Add the 8-bit immediate value
+000000r 2                 sta sum8            ; Store the result in sum8
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD8TO16_AAA num16, num8, sum16
+000000r 2                 clc                 ; Clear carry before the addition
+000000r 2                 lda num16           ; Load the LSB of the 16-bit number
+000000r 2                 adc num8            ; Add the 8-bit number to it
+000000r 2                 sta sum16           ; Store the result in the LSB of sum16
+000000r 2               
+000000r 2                 lda num16+1         ; Load the MSB of the 16-bit number
+000000r 2                 adc #0              ; Add carry (if any) from the LSB addition
+000000r 2                 sta sum16+1         ; Store the result in the MSB of sum16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD8TO16_AVA num16, num8, sum16
+000000r 2                 clc                 ; Clear carry before the addition
+000000r 2                 lda num16           ; Load the LSB of the 16-bit number
+000000r 2                 adc #num8           ; Add the 8-bit immediate value
+000000r 2                 sta sum16           ; Store the result in the LSB of sum16
+000000r 2               
+000000r 2                 lda num16+1         ; Load the MSB of the 16-bit number
+000000r 2                 adc #0              ; Add carry (if any) from the LSB addition
+000000r 2                 sta sum16+1         ; Store the result in the MSB of sum16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD8TO24_AAA num24, num8, sum24
+000000r 2                 clc                 ; Clear carry before the addition
+000000r 2                 lda num24           ; Load the LSB of the 24-bit number
+000000r 2                 adc num8            ; Add the 8-bit number to it
+000000r 2                 sta sum24           ; Store the result in the LSB of sum24
+000000r 2               
+000000r 2                 lda num24+1         ; Load the middle byte of the 24-bit number
+000000r 2                 adc #0              ; Add carry (if any) from the LSB addition
+000000r 2                 sta sum24+1         ; Store the result in the middle byte of sum24
+000000r 2               
+000000r 2                 lda num24+2         ; Load the MSB of the 24-bit number
+000000r 2                 adc #0              ; Add carry (if any)
+000000r 2                 sta sum24+2         ; Store the result in the MSB of sum24
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD8TO24_AVA num24, num8, sum24
+000000r 2                 clc                 ; Clear carry before the addition
+000000r 2                 lda num24           ; Load the LSB of the 24-bit number
+000000r 2                 adc #num8           ; Add the 8-bit immediate value to it
+000000r 2                 sta sum24           ; Store the result in the LSB of sum24
+000000r 2               
+000000r 2                 lda num24+1         ; Load the middle byte of the 24-bit number
+000000r 2                 adc #0              ; Add carry (if any)
+000000r 2                 sta sum24+1         ; Store the result in the middle byte of sum24
+000000r 2               
+000000r 2                 lda num24+2         ; Load the MSB of the 24-bit number
+000000r 2                 adc #0              ; Add carry (if any)
+000000r 2                 sta sum24+2         ; Store the result in the MSB of sum24
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD16TO16_AAA num1_16, num2_16, sum16
+000000r 2                 clc                 ; Clear carry before the addition
+000000r 2                 lda num1_16         ; Load the LSB of the first 16-bit number
+000000r 2                 adc num2_16         ; Add the LSB of the second 16-bit number
+000000r 2                 sta sum16           ; Store the result in the LSB of sum16
+000000r 2               
+000000r 2                 lda num1_16+1       ; Load the MSB of the first 16-bit number
+000000r 2                 adc num2_16+1       ; Add the MSB of the second 16-bit number (with carry)
+000000r 2                 sta sum16+1         ; Store the result in the MSB of sum16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD16TO16_AVA num1_16, num2_16, sum16
+000000r 2                 clc                 ; Clear carry before the addition
+000000r 2               
+000000r 2                 ; Add the least significant byte (LSB)
+000000r 2                 lda num1_16         ; Load LSB of num1_16
+000000r 2                 adc #<num2_16       ; Add the LSB of the 16-bit immediate value
+000000r 2                 sta sum16           ; Store the result in LSB of sum16
+000000r 2               
+000000r 2                 ; Add the most significant byte (MSB)
+000000r 2                 lda num1_16+1       ; Load MSB of num1_16
+000000r 2                 adc #>num2_16       ; Add the MSB of the 16-bit immediate value
+000000r 2                 sta sum16+1         ; Store the result in MSB of sum16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD16TO24_AAA num16, num24, sum24
+000000r 2                 clc                      ; Clear carry before first addition
+000000r 2               
+000000r 2                 ; Add the low byte of the 16-bit number to the low byte of the 24-bit number
+000000r 2                 lda num16                ; Load the LSB of the 16-bit number
+000000r 2                 adc num24                ; Add to the LSB of the 24-bit number
+000000r 2                 sta sum24                ; Store the result in the LSB of sum24
+000000r 2               
+000000r 2                 ; Add the high byte of the 16-bit number to the middle byte of the 24-bit number
+000000r 2                 lda num16+1              ; Load the MSB of the 16-bit number
+000000r 2                 adc num24+1              ; Add to the middle byte of the 24-bit number (with carry)
+000000r 2                 sta sum24+1              ; Store the result in the middle byte of sum24
+000000r 2               
+000000r 2                 ; Add carry to the highest byte of the 24-bit number
+000000r 2                 lda sum24+2              ; Load the highest byte of the 24-bit sum
+000000r 2                 adc #0                   ; Add carry from the previous addition
+000000r 2                 sta sum24+2              ; Store the result in the highest byte of sum24
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_ADD16TO24_AVA num24, num16, sum24
+000000r 2                 clc                      ; Clear carry before the addition
+000000r 2               
+000000r 2                 ; Add the low byte of the 16-bit immediate value to the low byte of the 24-bit value
+000000r 2                 lda num24                ; Load the LSB of the 24-bit value
+000000r 2                 adc #<num16              ; Add the LSB of the 16-bit immediate value
+000000r 2                 sta sum24                ; Store the result in the LSB of sum24
+000000r 2               
+000000r 2                 ; Add the high byte of the 16-bit immediate value to the middle byte of the 24-bit value
+000000r 2                 lda num24+1              ; Load the middle byte of the 24-bit value
+000000r 2                 adc #>num16              ; Add the MSB of the 16-bit immediate value
+000000r 2                 sta sum24+1              ; Store the result in the middle byte of sum24
+000000r 2               
+000000r 2                 ; Add carry to the highest byte of the 24-bit number
+000000r 2                 lda num24+2              ; Load the highest byte of the 24-bit value
+000000r 2                 adc #0                   ; Add carry from the previous addition
+000000r 2                 sta sum24+2              ; Store the result in the highest byte of sum24
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_MAX16BIT_AV num1, num2
+000000r 2                 ; High byte comparison
+000000r 2                 lda #>num2          ; Load high byte of num2
+000000r 2                 cmp num1+1          ; Compare with high byte of num1
+000000r 2                 bcc @end            ; If num2 < num1, skip to the end
+000000r 2               
+000000r 2                 bne @isHigher
+000000r 2               
+000000r 2                 ; Low byte comparison
+000000r 2                 lda #<num2          ; Load low byte of num2
+000000r 2                 cmp num1            ; Compare with low byte of num1
+000000r 2                 bcc @end            ; If num2 < num1, skip to the end
+000000r 2               
+000000r 2               @isHigher:
+000000r 2                 ; Replace num1 with num2
+000000r 2                 lda #>num2
+000000r 2                 sta num1+1
+000000r 2                 lda #<num2
+000000r 2                 sta num1
+000000r 2               
+000000r 2               @end:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_MIN16BIT_AV num1, num2
+000000r 2                 ; High byte comparison
+000000r 2                 lda num1+1          ; Load high byte of num1
+000000r 2                 cmp #>num2          ; Compare with high byte of num2
+000000r 2                 bmi :+              ; If num1 < num2, skip replacement
+000000r 2                 lda #>num2
+000000r 2                 sta num1+1          ; Replace high byte of num1 with num2
+000000r 2               
+000000r 2                 ; Low byte comparison
+000000r 2                 lda #<num2          ; Load low byte of num2
+000000r 2                 cmp num1            ; Compare with low byte of num1
+000000r 2                 bcs :+              ; If num2 >= num1, skip replacement
+000000r 2                 sta num1            ; Replace low byte of num1 with num2
+000000r 2               :
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_SUB8FROM16_AVA num16, num8, result16
+000000r 2                 sec                 ; Set carry to indicate subtraction (this is equivalent to "no borrow")
+000000r 2                 lda num16           ; Load LSB of 16-bit number
+000000r 2                 sbc #num8           ; Subtract the 8-bit immediate value
+000000r 2                 sta result16        ; Store the result in LSB of result16
+000000r 2               
+000000r 2                 lda num16+1         ; Load MSB of 16-bit number
+000000r 2                 sbc #0              ; Subtract carry from the MSB
+000000r 2                 sta result16+1      ; Store the result in MSB of result16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBMATH_SUB24FROM24_AAA num1_24, num2_24, result24
+000000r 2                 sec                 ; Set carry to indicate subtraction (equivalent to clearing the borrow)
+000000r 2               
+000000r 2                 ; Subtract the least significant byte (LSB)
+000000r 2                 lda num1_24         ; Load LSB of num1_24
+000000r 2                 sbc num2_24         ; Subtract LSB of num2_24
+000000r 2                 sta result24        ; Store the result in LSB of result24
+000000r 2               
+000000r 2                 ; Subtract the middle byte
+000000r 2                 lda num1_24+1       ; Load middle byte of num1_24
+000000r 2                 sbc num2_24+1       ; Subtract middle byte of num2_24
+000000r 2                 sta result24+1      ; Store the result in the middle byte of result24
+000000r 2               
+000000r 2                 ; Subtract the most significant byte (MSB)
+000000r 2                 lda num1_24+2       ; Load MSB of num1_24
+000000r 2                 sbc num2_24+2       ; Subtract MSB of num2_24
+000000r 2                 sta result24+2      ; Store the result in MSB of result24
+000000r 2               .endmacro
+000000r 2               
+000000r 1                 .include "../../library/libScreen.asm"     ; Includes screen management functions
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libScreen
+000000r 2               ;===============================================================================
+000000r 2               ; Macros
+000000r 2               
+000000r 2               .macro LIBSCREEN_DISABLEPPU
+000000r 2                 ; PPUMASK: Disable background and sprites, while preserving custom settings
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK_SHADOW value
+000000r 2                 and #%11100111          ; Clear Bit 2 and Bit 3 (disable background and sprites)
+000000r 2                 sta PPUMASK             ; Store the updated value into the PPUMASK register
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               
+000000r 2                 ; PPUCTRL: Clear only the NMI enable bit (bit 7) and preserve existing settings
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL_SHADOW value
+000000r 2                 and #%01111111          ; Clear Bit 7 (disable NMI)
+000000r 2                 sta PPUCTRL             ; Store the updated value into PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_ENABLEPPU
+000000r 2                 ; PPUMASK: Ensure background and sprites are enabled, while preserving custom settings
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK_SHADOW value
+000000r 2                 ora #%00011000          ; Ensure background and sprites are enabled
+000000r 2                 sta PPUMASK             ; Store the updated value into the PPUMASK register
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               
+000000r 2                 ; PPUCTRL: Set only the NMI enable bit (bit 7) and merge with existing settings
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL_SHADOW value
+000000r 2                 ora #%10000000          ; Set Bit 7 (enable NMI)
+000000r 2                 sta PPUCTRL             ; Store the updated value into PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_INIT
+000000r 2               .scope
+000000r 2                 sei             ; Disable interrupts (IRQs)
+000000r 2                 cld             ; Disable decimal mode
+000000r 2                 ldx #$40
+000000r 2                 stx APUFRAME    ; Disable APU frame IRQ
+000000r 2                 ldx #$ff
+000000r 2                 txs             ; Set up stack
+000000r 2                 inx             ; Now X = 0
+000000r 2                 stx PPUCTRL     ; Disable NMI (Non-maskable interrupt)
+000000r 2                 stx PPUMASK     ; Disable rendering
+000000r 2                 stx DMCFREQ     ; Disable DMC IRQs
+000000r 2               
+000000r 2                 ; Clear the vblank flag to ensure LIBSCREEN_WAITVSYNC doesn't exit immediately
+000000r 2                 bit PPUSTATUS
+000000r 2               
+000000r 2                 ; Wait for vertical blank to make sure the PPU has stabilized
+000000r 2                 LIBSCREEN_WAITVSYNC
+000000r 2               
+000000r 2                 ; Fill RAM with $00 to initialize memory
+000000r 2                 txa             ; Conveniently, X is 0, which matches what we need for filling RAM
+000000r 2               clrmem:
+000000r 2                 sta $000,x
+000000r 2                 sta $100,x
+000000r 2                 sta $200,x
+000000r 2                 sta $300,x
+000000r 2                 sta $400,x
+000000r 2                 sta $500,x
+000000r 2                 sta $600,x
+000000r 2                 sta $700,x
+000000r 2                 inx
+000000r 2                 bne clrmem
+000000r 2               
+000000r 2                 ; Wait for another VSYNC, PPU is now fully ready
+000000r 2                 LIBSCREEN_WAITVSYNC
+000000r 2               
+000000r 2                 ; Choose some sensible PPU defaults here:
+000000r 2               
+000000r 2                 ; Enable background rendering in the leftmost 8 pixels
+000000r 2                 LIBSCREEN_LEFT8PIXELSBACKGROUNDENABLE
+000000r 2               
+000000r 2                 ; Disable sprite rendering in the leftmost 8 pixels
+000000r 2                 LIBSCREEN_LEFT8PIXELSSPRITESDISABLE
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSBACKGROUNDDISABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 and #%11111101          ; Clear Bit 1 (disable background in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSBACKGROUNDENABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 ora #%00000010          ; Set Bit 1 (enable background in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSSPRITESDISABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 and #%11111011          ; Clear Bit 2 (disable sprites in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LEFT8PIXELSSPRITESENABLE
+000000r 2                 lda PPUMASK_SHADOW      ; Load the current PPUMASK settings from the shadow register
+000000r 2                 ora #%00000100          ; Set Bit 2 (enable sprites in leftmost 8 pixels)
+000000r 2                 sta PPUMASK             ; Store the updated value in PPUMASK
+000000r 2                 sta PPUMASK_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LOADNAMETABLE_AA nametable, screen
+000000r 2               .scope
+000000r 2               
+000000r 2                 ; Set the PPU address to the starting position of the nametable
+000000r 2                 LIBSCREEN_SETPPUADDRESS_A nametable
+000000r 2               
+000000r 2                 ; Set source pointer to the start of screen data
+000000r 2                 LIBSCREEN_SETADDRESS_AA screen, wLibTemp1
+000000r 2               
+000000r 2                 ; Copy 1024 bytes (4 pages) from mapStart to the PPU
+000000r 2                 ldx #0                    ; Initialize X for page counter (0 to 3)
+000000r 2               copy_page:
+000000r 2                 ldy #0                    ; Start from the beginning of each page
+000000r 2               copy_row:
+000000r 2                 lda (wLibTemp1), y        ; Load data from mapStart + (X * 256) + Y
+000000r 2                 sta PPUDATA               ; Write data to the PPU
+000000r 2                 iny
+000000r 2                 bne copy_row              ; Repeat until Y overflows back to 0 (256 bytes per page)
+000000r 2               
+000000r 2                 inc wLibTemp1+1           ; Increment high byte of source to move to the next page
+000000r 2                 inx
+000000r 2                 cpx #4                    ; Loop until 4 pages are copied (1024 bytes)
+000000r 2                 bne copy_page
+000000r 2               
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LOADPALETTEENTRY_AVV palette, entry, color
+000000r 2               .scope
+000000r 2                 lda #>palette          ; High byte of palette address
+000000r 2                 sta PPUADDR            ; Set high byte of PPU address
+000000r 2                 lda #<palette + entry  ; Low byte with offset
+000000r 2                 sta PPUADDR            ; Set low byte of PPU address
+000000r 2                 lda #color             ; Load the color value
+000000r 2                 sta PPUDATA            ; Write the color to the PPU
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_LOADPALETTE_AA palette, colorData
+000000r 2               .scope
+000000r 2                 LIBSCREEN_SETPPUADDRESS_A palette
+000000r 2               
+000000r 2                 ; Set palette data (16 bytes)
+000000r 2                 ldy #0
+000000r 2               palette_loop:
+000000r 2                 lda colorData,y
+000000r 2                 sta PPUDATA
+000000r 2                 iny
+000000r 2                 cpy #16
+000000r 2                 bne palette_loop
+000000r 2               
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETADDRESS_AA address, var16
+000000r 2                 lda #>address
+000000r 2                 sta var16+1
+000000r 2                 lda #<address
+000000r 2                 sta var16
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETBACKGROUNDCOLOR_V color
+000000r 2                 LIBSCREEN_SETPPUADDRESS_A BGPALETTE
+000000r 2                 LIBSCREEN_SETPPUDATA_V color
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETPPUADDRESS_A address
+000000r 2                 lda #>address
+000000r 2                 sta PPUADDR
+000000r 2                 lda #<address
+000000r 2                 sta PPUADDR
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETPPUDATA_V byte
+000000r 2                 lda #byte
+000000r 2                 sta PPUDATA
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETSCROLL_AA wScrX, wScrY
+000000r 2               .scope
+000000r 2                 lda wScrX
+000000r 2                 sta PPUSCROLL
+000000r 2               
+000000r 2                 lda wScrY
+000000r 2                 sta PPUSCROLL
+000000r 2               
+000000r 2                 lda wScrX+1
+000000r 2                 and #1
+000000r 2                 sta bLibTemp1
+000000r 2               
+000000r 2                 lda PPUCTRL_SHADOW
+000000r 2                 and #$FE
+000000r 2                 ora bLibTemp1
+000000r 2                 sta PPUCTRL_SHADOW
+000000r 2                 sta PPUCTRL
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETSPRITESIZE8x8
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL settings from the shadow register
+000000r 2                 and #%11011111          ; Clear Bit 5 (enable 8x8 sprite mode)
+000000r 2                 sta PPUCTRL             ; Store the updated value in PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_SETSPRITESIZE8x16
+000000r 2                 lda PPUCTRL_SHADOW      ; Load the current PPUCTRL settings from the shadow register
+000000r 2                 ora #%00100000          ; Set Bit 5 (enable 8x16 sprite mode)
+000000r 2                 sta PPUCTRL             ; Store the updated value in PPUCTRL
+000000r 2                 sta PPUCTRL_SHADOW      ; Update the shadow register
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_WAITSPRITE0
+000000r 2               .scope
+000000r 2               wait_sprite0_set:
+000000r 2                 bit PPUSTATUS
+000000r 2                 bvs wait_sprite0_set
+000000r 2               wait_sprite0_clear:
+000000r 2                 bit PPUSTATUS
+000000r 2                 bvc wait_sprite0_clear
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSCREEN_WAITVSYNC
+000000r 2               .scope
+000000r 2               wait_vsync:
+000000r 2                 bit PPUSTATUS
+000000r 2                 bpl wait_vsync
+000000r 2               .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 1                 .include "../../library/libSprite.asm"     ; Includes sprite management functions
+000000r 2               ;===============================================================================
+000000r 2               ;                     RetroGameDev NES Edition libSprite
+000000r 2               ;===============================================================================
+000000r 2               ; Macros
+000000r 2               
+000000r 2               .macro LIBSPRITE_INIT
+000000r 2                 ; Set all 64 sprites' Y positions to 255 (off-screen)
+000000r 2                 lda #255
+000000r 2                 sta bLibTemp2
+000000r 2                 ldx #0
+000000r 2               @loop:
+000000r 2                 stx bLibTemp1
+000000r 2                 LIBSPRITE_SETPOSITIONY_AA bLibTemp1, bLibTemp2
+000000r 2                 inx
+000000r 2                 cpx #64
+000000r 2                 bne @loop
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETFRAME8x16_AAV bSprite, bIndex, bPatternTable
+000000r 2                 ; Every 4th byte from 1
+000000r 2                 lda bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 iny ; +1
+000000r 2                 lda bIndex ; Load bIndex
+000000r 2                 ora #bPatternTable
+000000r 2                 sta SPRITERAM,y ; Set the calculated address to bIndex
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETFRAME8x16_VVV bSprite, bIndex, bPatternTable
+000000r 2                 ; Every 4th byte from 1
+000000r 2                 lda #bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 iny ; +1
+000000r 2                 lda #bIndex     ; Load bIndex
+000000r 2                 ora #bPatternTable
+000000r 2                 sta SPRITERAM,y ; Set the calculated address to bIndex
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPALETTE_AA bSprite, bPalette
+000000r 2                 ; Every 4th byte from 2
+000000r 2                 lda bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 iny ; +1
+000000r 2                 iny ; +2
+000000r 2                 lda SPRITERAM,y ; Load from calculated address
+000000r 2                 and #%11111100  ; Clear bits 0 & 1
+000000r 2                 ora bPalette    ; Merge with bPalette
+000000r 2                 sta SPRITERAM,y ; Set back to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPALETTE_VV bSprite, bPalette
+000000r 2                 ; Every 4th byte from 2
+000000r 2                 lda #bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 iny ; +1
+000000r 2                 iny ; +2
+000000r 2                 lda SPRITERAM,y ; Load from calculated address
+000000r 2                 and #%11111100  ; Clear bits 0 & 1
+000000r 2                 ora #bPalette   ; Merge with bPalette
+000000r 2                 sta SPRITERAM,y ; Set back to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPOSITIONX_AA bSprite, bXPos
+000000r 2                 ; Every 4th byte from 3
+000000r 2                 lda bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 iny ; +1
+000000r 2                 iny ; +2
+000000r 2                 iny ; +3
+000000r 2                 lda bXPos           ; Load X position
+000000r 2                 sta SPRITERAM,y     ; Set to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPOSITIONX_VV bSprite, bXPos
+000000r 2                 ; Every 4th byte from 3
+000000r 2                 lda #bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 iny ; +1
+000000r 2                 iny ; +2
+000000r 2                 iny ; +3
+000000r 2                 lda #bXPos          ; Load X position
+000000r 2                 sta SPRITERAM,y     ; Set to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPOSITIONY_AA bSprite, bYPos
+000000r 2                 ; Every 4th byte from 0
+000000r 2                 lda bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 lda bYPos           ; Load Y position
+000000r 2                 sta SPRITERAM,y     ; Set to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPOSITIONY_VV bSprite, bYPos
+000000r 2                 ; Every 4th byte from 0
+000000r 2                 lda #bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 lda #bYPos          ; Load Y position
+000000r 2                 sta SPRITERAM,y     ; Set to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_SETPOSITION_AAA bSprite, bXPos, bYPos
+000000r 2                 ; Every 4th byte from 0 (Y position)
+000000r 2                 lda bSprite
+000000r 2                 asl ; Multiply by 2
+000000r 2                 asl ; Multiply by 4
+000000r 2                 tay
+000000r 2                 lda bYPos           ; Load Y position
+000000r 2                 sta SPRITERAM,y     ; Set to calculated address
+000000r 2               
+000000r 2                 ; Every 4th byte from 3 (X position)
+000000r 2                 iny ; +1
+000000r 2                 iny ; +2
+000000r 2                 iny ; +3
+000000r 2                 lda bXPos           ; Load X position
+000000r 2                 sta SPRITERAM,y     ; Set to calculated address
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ;===============================================================================
+000000r 2               
+000000r 2               .macro LIBSPRITE_UPDATE
+000000r 2                 lda #>SPRITERAM     ; Load high byte of SPRITERAM address
+000000r 2                 sta OAMDMA          ; Trigger OAM DMA to copy sprite data
+000000r 2               .endmacro
+000000r 2               
+000000r 1               
+000000r 1               ;===============================================================================
+000000r 1               ; Game Initialization
+000000r 1               gameMainInit:
+000000r 1  78 D8 A2 40    LIBSCREEN_INIT                          ; Initialize the screen and PPU settings
+000004r 1  8E 17 40 A2  
+000008r 1  FF 9A E8 8E  
+00004Er 1               
+00004Er 1                 ; Load background & sprite palettes
+00004Er 1  A9 3F 8D 06    LIBSCREEN_LOADPALETTE_AA BGPALETTE, PaletteBG
+000052r 1  20 A9 00 8D  
+000056r 1  06 20 A0 00  
+000065r 1  A9 3F 8D 06    LIBSCREEN_LOADPALETTE_AA SPPALETTE, PaletteSP
+000069r 1  20 A9 10 8D  
+00006Dr 1  06 20 A0 00  
+00007Cr 1               
+00007Cr 1                 ; Load screen data to the left nametable
+00007Cr 1  A9 20 8D 06    LIBSCREEN_LOADNAMETABLE_AA NAMETABLE0, DesertLeft
+000080r 1  20 A9 00 8D  
+000084r 1  06 20 A9 rr  
+0000A1r 1               
+0000A1r 1                 ; Load screen data to the right nametable
+0000A1r 1  A9 24 8D 06    LIBSCREEN_LOADNAMETABLE_AA NAMETABLE1, DesertRight
+0000A5r 1  20 A9 00 8D  
+0000A9r 1  06 20 A9 rr  
+0000C6r 1               
+0000C6r 1  A9 FF 85 rr    LIBSPRITE_INIT                          ; Initialize sprites
+0000CAr 1  A2 00 86 rr  
+0000CEr 1  A5 rr 0A 0A  
+0000DDr 1  A5 rr 09 20    LIBSCREEN_SETSPRITESIZE8x16             ; Set sprites to 8x16 pixel mode for larger character sizes
+0000E1r 1  8D 00 20 85  
+0000E5r 1  rr           
+0000E6r 1  20 rr rr       jsr gameDataSpritesInit                 ; Initialize sprite data for the game
+0000E9r 1               
+0000E9r 1  A5 rr 09 18    LIBSCREEN_ENABLEPPU                     ; Enable PPU rendering (sprites, background)
+0000EDr 1  8D 01 20 85  
+0000F1r 1  rr A5 rr 09  
+0000FBr 1                 ; No 'rts' (return) here, so the code will flow directly into the main game loop
+0000FBr 1               
+0000FBr 1               ;===============================================================================
+0000FBr 1               ; Main Game Update Loop
+0000FBr 1               gameMainUpdate:
+0000FBr 1  A5 rr          lda bFrameReady      ; Load the frame-ready flag
+0000FDr 1  F0 FC          beq gameMainUpdate   ; If frame not ready (bFrameReady = 0), loop and wait
+0000FFr 1               
+0000FFr 1                 ; Game logic goes here (currently waiting for sprite 0 hit)
+0000FFr 1  2C 02 20 70    LIBSCREEN_WAITSPRITE0              ; Wait for sprite 0 hit (sync game events)
+000103r 1  FB 2C 02 20  
+000107r 1  50 FB        
+000109r 1  20 rr rr       jsr gameMainUpdateBottomScroll     ; Update bottom scroll values
+00010Cr 1               
+00010Cr 1  A9 00          lda #0               ; Reset the bFrameReady flag back to 0
+00010Er 1  85 rr          sta bFrameReady      ; Prevents game logic from running more than once per frame
+000110r 1  4C rr rr       jmp gameMainUpdate   ; Infinite loop - returns to the beginning of the update loop
+000113r 1               
+000113r 1               ;===============================================================================
+000113r 1               ; NMI (Non-Maskable Interrupt) Handler
+000113r 1               gameMainNMI:
+000113r 1  A9 02 8D 14    LIBSPRITE_UPDATE     ; Update sprites in OAM (Object Attribute Memory)
+000117r 1  40           
+000118r 1  20 rr rr       jsr gameMainUpdateTopScroll ; Update top scroll values
+00011Br 1               
+00011Br 1  A9 01          lda #1               ; Set bFrameReady flag to 1 to signal the game update loop
+00011Dr 1  85 rr          sta bFrameReady      ; Store the flag in memory
+00011Fr 1  40             rti                  ; Return from interrupt - graphics update happens after this
+000120r 1               
+000120r 1               ;===============================================================================
+000120r 1               ; Bottom Scroll Update Subroutine
+000120r 1               gameMainUpdateBottomScroll:
+000120r 1                 ; Add 100 subpixels to the horizontal scroll position every frame
+000120r 1  18 A5 rr 69    LIBMATH_ADD8TO24_AVA wBottomScrollX, 100, wBottomScrollX
+000124r 1  64 85 rr A5  
+000128r 1  rr 69 00 85  
+000133r 1               
+000133r 1                 ; Set the bottom scroll for the screen (based on the current scroll values)
+000133r 1  A5 rr 8D 05    LIBSCREEN_SETSCROLL_AA wBottomScrollX+1, wBottomScrollY+1
+000137r 1  20 A5 rr 8D  
+00013Br 1  05 20 A5 rr  
+00014Er 1  60             rts                    ; Return from subroutine
+00014Fr 1               
+00014Fr 1               ;===============================================================================
+00014Fr 1               ; Top Scroll Update Subroutine
+00014Fr 1               gameMainUpdateTopScroll:
+00014Fr 1                 ; Add 50 subpixels to the horizontal scroll position every frame (half the speed of the bottom)
+00014Fr 1  18 A5 rr 69    LIBMATH_ADD8TO24_AVA wTopScrollX, 50, wTopScrollX
+000153r 1  32 85 rr A5  
+000157r 1  rr 69 00 85  
+000162r 1               
+000162r 1                 ; Set the top scroll for the screen (based on the current scroll values)
+000162r 1  A5 rr 8D 05    LIBSCREEN_SETSCROLL_AA wTopScrollX+1, wTopScrollY+1
+000166r 1  20 A5 rr 8D  
+00016Ar 1  05 20 A5 rr  
+00017Dr 1  60             rts                    ; Return from subroutine
+00017Er 1               
+00017Er 1               ;===============================================================================
+00017Er 1               ; Data Segment
+00017Er 1                 .include "gameData.asm" ; Include external game data (background map, palettes, etc.)
+00017Er 2               ;===============================================================================
+00017Er 2               ;                     RetroGameDev NES Edition gameData
+00017Er 2               ;===============================================================================
+00017Er 2               ; Constants
+00017Er 2               Sprite0_X = 8
+00017Er 2               Sprite0_Y = 162  ; Y position for Sprite 0 on the screen
+00017Er 2               
+00017Er 2               ;===============================================================================
+00017Er 2               ; Palette Data
+00017Er 2               PaletteBG:
+00017Er 2  08 20 27 31    .incbin "../../content/tankracebackground.pal"
+000182r 2  08 20 17 31  
+000186r 2  08 38 37 17  
+00018Er 2               
+00018Er 2               PaletteSP:
+00018Er 2  08 0F 08 18    .incbin "../../content/tankracesprites.pal"
+000192r 2  08 0F 0A 1A  
+000196r 2  08 0F 06 20  
+00019Er 2               
+00019Er 2               ;===============================================================================
+00019Er 2               ; Screen Data
+00019Er 2               DesertLeft:
+00019Er 2  01 01 01 01    .incbin "../../content/tankracedesertleft.nam"
+0001A2r 2  01 01 01 01  
+0001A6r 2  01 01 01 01  
+00059Er 2               
+00059Er 2               DesertRight:
+00059Er 2  01 01 01 01    .incbin "../../content/tankracedesertright.nam"
+0005A2r 2  01 01 01 01  
+0005A6r 2  01 01 01 01  
+00099Er 2               
+00099Er 2               ;===============================================================================
+00099Er 2               ; Sprite Data
+00099Er 2               
+00099Er 2               bSpriteTiles:
+00099Er 2  FE             /* 00-00 */ .byte $FE  ; Sprite 0 tile ID
+00099Fr 2  FF             /* End flag */ .byte $FF  ; End of sprite tiles array (terminates init loop)
+0009A0r 2               
+0009A0r 2               bSpritePalettes:
+0009A0r 2  00             /* 00-00 */ .byte $00  ; Palette for Sprite 0
+0009A1r 2               
+0009A1r 2               bSpriteXPos:
+0009A1r 2  08             /* 00-00 */ .byte Sprite0_X  ; X position for Sprite 0
+0009A2r 2               
+0009A2r 2               bSpriteYPos:
+0009A2r 2  A2             /* 00-00 */ .byte Sprite0_Y  ; Y position for Sprite 0
+0009A3r 2               
+0009A3r 2               ;===============================================================================
+0009A3r 2               ; Sprite Initialization Subroutine
+0009A3r 2               
+0009A3r 2               gameDataSpritesInit:
+0009A3r 2  A2 00          ldx #0                 ; Initialize X register to 0 (starting index for sprites)
+0009A5r 2               
+0009A5r 2               sprite_loop:
+0009A5r 2  86 rr          stx bLibTemp1          ; Store sprite index in bLibTemp1 (used for sprite number)
+0009A7r 2               
+0009A7r 2                 ; Set sprite pattern tile
+0009A7r 2  BD rr rr       lda bSpriteTiles, x     ; Load sprite tile from array based on X index
+0009AAr 2  C9 FF          cmp #$FF                ; Check if tile is the terminator ($FF)
+0009ACr 2  F0 45          beq sprite_done         ; If it's $FF, exit the loop
+0009AEr 2  85 rr          sta bLibTemp2           ; Store tile in bLibTemp2 for later use
+0009B0r 2  A5 rr 0A 0A    LIBSPRITE_SETFRAME8x16_AAV bLibTemp1, bLibTemp2, 1 ; Set the sprite frame to 8x16 mode
+0009B4r 2  A8 C8 A5 rr  
+0009B8r 2  09 01 99 00  
+0009BDr 2               
+0009BDr 2                 ; Set sprite palette
+0009BDr 2  BD rr rr       lda bSpritePalettes, x  ; Load sprite palette from array based on X index
+0009C0r 2  85 rr          sta bLibTemp2           ; Store palette in bLibTemp2
+0009C2r 2  A5 rr 0A 0A    LIBSPRITE_SETPALETTE_AA bLibTemp1, bLibTemp2 ; Set sprite palette
+0009C6r 2  A8 C8 C8 B9  
+0009CAr 2  00 02 29 FC  
+0009D3r 2               
+0009D3r 2                 ; Set sprite X and Y position
+0009D3r 2  BD rr rr       lda bSpriteXPos, x      ; Load X position from array
+0009D6r 2  85 rr          sta bLibTemp2           ; Store X position in bLibTemp2
+0009D8r 2  BD rr rr       lda bSpriteYPos, x      ; Load Y position from array
+0009DBr 2  85 rr          sta bLibTemp3           ; Store Y position in bLibTemp3
+0009DDr 2  A5 rr 0A 0A    LIBSPRITE_SETPOSITION_AAA bLibTemp1, bLibTemp2, bLibTemp3 ; Set sprite position (X, Y)
+0009E1r 2  A8 A5 rr 99  
+0009E5r 2  00 02 C8 C8  
+0009EFr 2               
+0009EFr 2  E8             inx                     ; Increment X to move to the next sprite
+0009F0r 2  4C rr rr       jmp sprite_loop         ; Repeat the loop for the next sprite
+0009F3r 2               
+0009F3r 2               sprite_done:
+0009F3r 2  60             rts                     ; Return from subroutine
+0009F4r 2               
+0009F4r 1               
+0009F4r 1               ;===============================================================================
+0009F4r 1               ; Character Segment (CHR-ROM)
+0009F4r 1               .segment "CHARS"
+000000r 1                 ; ROM chars start at PPU address $0000
+000000r 1  00 00 00 00    .incbin "../../content/tankracebackground.chr"
+000004r 1  00 00 00 00  
+000008r 1  00 00 00 00  
+001000r 1  00 00 00 00    .incbin "../../content/tankracesprites.chr"
+001004r 1  00 00 00 00  
+001008r 1  00 00 00 00  
+002000r 1               
+002000r 1               ;===============================================================================
+002000r 1               ; Interrupt Vectors
+002000r 1               .segment "VECTORS"
+000000r 1                 ; This segment defines what happens during specific events:
+000000r 1  rr rr          .word gameMainNMI     ; NMI (VBlank) - triggered every frame to handle graphics
+000002r 1  rr rr          .word gameMainInit    ; Reset - called when the game is first started
+000004r 1  00 00          .word 0               ; IRQ - not used in this simple project
+000004r 1               
